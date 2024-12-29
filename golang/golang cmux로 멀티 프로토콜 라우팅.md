@@ -31,39 +31,55 @@ httpL := m.Match(cmux.HTTP1Fast())
 trpcL := m.Match(cmux.Any())
 ```
 이렇게 cmux에 다양항 매처를 추가할 수 있습니다.
-
+match함수는 muxListener 구조체를 리턴합니다.
 ```go
 go grpcS.Serve(grpcL)
 go httpS.Serve(httpL)
 go trpcS.Accept(trpcL)
 ```
-그 각 프로토콜의 serve함수에 이렇게 등록할 수 있습니다.
 
-그후 cmux를 serve 해주면 끝입니다.
+그 각 프로토콜의 serve함수에 이렇게 등록할 수 있습니다.
+```go
+func (l muxListener) Accept() (net.Conn, error) {
+	select {
+	case c, ok := <-l.connc:
+		if !ok {
+			return nil, ErrListenerClosed
+		}
+		return c, nil
+	case <-l.donec:
+		return nil, ErrServerClosed
+	}
+}
+```
+그후 cmux를 serve 해주면 끝입니다. 그럼 serve안에서 cmux에서 감싸준 muxListener의 accept함수를 호출하며 대기 합니다.
 ```
 // Start serving!
 m.Serve()
 ```
+
 serve의 내부 구현을 간단하게 살펴 봅시다.
 ```go
 for _, sl := range m.sls {
-		for _, s := range sl.ss {
-			matched := s(muc.Conn, muc.startSniffing())
-			if matched {
-				muc.doneSniffing()
-				if m.readTimeout > noTimeout {
-					_ = c.SetReadDeadline(time.Time{})
-				}
-				select {
-				case sl.l.connc <- muc:
-				case <-donec:
-					_ = c.Close()
-				}
-				return
+	for _, s := range sl.ss {
+		matched := s(muc.Conn, muc.startSniffing())
+		if matched {
+			muc.doneSniffing()
+			if m.readTimeout > noTimeout {
+				_ = c.SetReadDeadline(time.Time{})
 			}
+			select {
+			case sl.l.connc <- muc:
+			case <-donec:
+				_ = c.Close()
+			}
+			return
 		}
 	}
+}
 ```
+이렇게 위에서 채널로 대기중인 accept리스너중 처음 매칭된 리스너에 커넥션을 주며 serve되게 됩니다.
+
 
 마지막으로 
 cmux에서 제공해주는 HTTP1Fast Matcher가 어떻게 구현 되어있는지 확인해보도록 하겠습니다.
